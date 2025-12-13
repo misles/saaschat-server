@@ -1,34 +1,31 @@
 FROM node:18-bullseye
 
-RUN sed -i 's/stable\/updates/stable-security\/updates/' /etc/apt/sources.list
-
-
-RUN apt-get update
+# Security updates and cleanup in a single RUN to reduce layers
+RUN sed -i 's/stable\/updates/stable-security\/updates/' /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create app directory
 WORKDIR /usr/src/app
 
-ARG NPM_TOKEN
-
-RUN if [ "$NPM_TOKEN" ]; \
-    then RUN COPY .npmrc_ .npmrc \
-    else export SOMEVAR=world; \
-    fi
-
-
-# Install app dependencies
-# A wildcard is used to ensure both package.json AND package-lock.json are copied
-# where available (npm@5+)
+# Copy package files first for better layer caching
 COPY package*.json ./
 
-RUN npm install --production
+ARG NPM_TOKEN
 
-RUN rm -f .npmrc
+# Handle NPM token securely
+RUN if [ -n "${NPM_TOKEN:-}" ]; then \
+    echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc && \
+    npm install --production && \
+    rm -f .npmrc; \
+    else \
+    npm install --production; \
+    fi
 
-# Bundle app source
+# Copy the rest of the application
 COPY . .
 
 EXPOSE 3000
 
 CMD [ "npm", "start" ]
-

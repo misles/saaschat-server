@@ -33,6 +33,21 @@ var roleChecker = require('./middleware/has-role');
 const MaskData = require("maskdata");
 var winston = require('./config/winston');
 
+// === ADD THIS CODE AFTER winston import ===
+// Supabase configuration validation
+const appConfig = require('./config');  // ← Use appConfig instead of config
+
+if (!appConfig.supabase.url || !appConfig.supabase.serviceRoleKey) {
+  console.error('❌ FATAL ERROR: Supabase configuration missing or invalid.');
+  console.error('Please check your .env file and ensure NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are properly set.');
+  console.error(`Current SUPABASE_URL: ${appConfig.supabase.url ? 'SET' : 'MISSING'}`);
+  console.error(`Current SERVICE_ROLE_KEY: ${appConfig.supabase.serviceRoleKey ? 'SET (first 10 chars): ' + appConfig.supabase.serviceRoleKey.substring(0, 10) + '...' : 'MISSING'}`);
+  process.exit(1);
+}
+
+console.log('✅ Supabase configuration validated successfully');
+console.log(`🌍 Server running in ${appConfig.server.nodeEnv} mode`);  // ← Use appConfig here too
+// ============================================
 
 // DATABASE CONNECTION
 
@@ -519,6 +534,17 @@ app.use('/testauth', [passport.authenticate(['basic', 'jwt'], { session: false }
 
 app.use('/widgets', widgetsLoader);
 app.use('/w', widgetsLoader);
+
+// === ADD THIS CODE AFTER widgetsLoader routes ===
+// LiveKit Routes
+const livekitSyncRouter = require('./routes/livekit/sync-agent')(mongoose.connection.db);
+const livekitFeaturesRouter = require('./routes/livekit/features')(mongoose.connection.db);
+
+app.use('/api/livekit', livekitSyncRouter);
+app.use('/api/livekit', livekitFeaturesRouter);
+
+console.log('✅ LiveKit routes registered');
+// =================================================
 
 app.use('/images', images);
 app.use('/files', files);
