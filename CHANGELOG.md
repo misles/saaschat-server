@@ -5,6 +5,21 @@
 🚀        IN PRODUCTION                        🚀
 (https://www.npmjs.com/package/@tiledesk/tiledesk-server/v/2.3.77) 
 
+# 2.13.46
+- Updated whatsapp-connector to 1.0.18
+
+# 2.13.45
+- Updated tybot-connector to 2.0.40
+
+# 2.13.44 - aborted
+- Updated tybot-connector to 2.0.39
+
+# 2.13.43
+- Updated requestService to improve fully abandoned management
+
+# 2.13.42
+- Updated whatsapp-connector to 1.0.17
+
 # 2.13.40
 - Changed minimum role access to agent for route /:project_id/logs
 
