@@ -537,13 +537,26 @@ app.use('/w', widgetsLoader);
 
 // === ADD THIS CODE AFTER widgetsLoader routes ===
 // LiveKit Routes
-const livekitSyncRouter = require('./routes/livekit/sync-agent')(mongoose.connection.db);
-const livekitFeaturesRouter = require('./routes/livekit/features')(mongoose.connection.db);
-
-app.use('/api/livekit', livekitSyncRouter);
-app.use('/api/livekit', livekitFeaturesRouter);
-
-console.log('✅ LiveKit routes registered');
+try {
+  // Get db connection - it might not be ready immediately
+  const db = mongoose.connection.db;
+  
+  if (!db) {
+    console.warn('⚠️ MongoDB connection not ready yet, LiveKit routes will initialize without db');
+  }
+  
+  const livekitSyncRouter = require('./routes/livekit/sync-agent')(db);
+  const livekitFeaturesRouter = require('./routes/livekit/features')(db);
+  const livekitCallsRouter = require('./routes/livekit/calls')(db); // NEW
+  
+  app.use('/api/livekit', livekitSyncRouter);
+  app.use('/api/livekit', livekitFeaturesRouter);
+  app.use('/api/livekit/calls', livekitCallsRouter); // NEW
+  
+  console.log('✅ LiveKit routes registered (including calls)');
+} catch (error) {
+  console.error('❌ Error registering LiveKit routes:', error.message);
+}
 // =================================================
 
 app.use('/images', images);
