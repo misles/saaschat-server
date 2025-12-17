@@ -12,7 +12,7 @@ module.exports = function(db) {
    */
   router.get('/:projectId', async (req, res) => {
     try {
-      const { projectId } = req.params;
+      const projectId = req.params.projectid;  // lowercase 'd'
       
       const result = await projectCallService.getProjectCallFeatures(projectId);
       
@@ -44,7 +44,7 @@ module.exports = function(db) {
    */
   router.put('/:projectId', async (req, res) => {
     try {
-      const { projectId } = req.params;
+      const projectId = req.params.projectid;  // lowercase 'd'
       const updates = req.body;
       
       // Get current features
@@ -107,7 +107,7 @@ module.exports = function(db) {
    */
   router.post('/:projectId/sync', async (req, res) => {
     try {
-      const { projectId } = req.params;
+      const projectId = req.params.projectid;  // lowercase 'd'
       const { force = false } = req.body;
       
       // Get project features
@@ -145,7 +145,7 @@ module.exports = function(db) {
    */
   router.get('/:projectId/usage', async (req, res) => {
     try {
-      const { projectId } = req.params;
+      const projectId = req.params.projectid;  // lowercase 'd'
       
       const result = await projectCallService.getProjectCallFeatures(projectId, false);
       if (!result.success) {
@@ -202,7 +202,7 @@ module.exports = function(db) {
    */
   router.post('/:projectId/test-call', async (req, res) => {
     try {
-      const { projectId } = req.params;
+      const projectId = req.params.projectid;  // lowercase 'd'
       const { call_type = 'audio' } = req.body;
       
       // Check if call is allowed
@@ -252,7 +252,7 @@ module.exports = function(db) {
    */
   router.post('/:projectId/reset-usage', async (req, res) => {
     try {
-      const { projectId } = req.params;
+      const projectId = req.params.projectid;  // lowercase 'd'
       
       const resetResult = await projectCallService.resetMonthlyUsage(projectId);
       
