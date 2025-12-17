@@ -550,12 +550,10 @@ try {
   const livekitCallsRouter = require('./routes/livekit/calls')(db); // NEW
   const projectCallFeaturesRouter = require('./routes/project-call-features')(db);
 
-
   app.use('/api/livekit', livekitSyncRouter);
   app.use('/api/livekit', livekitFeaturesRouter);
   app.use('/api/livekit/calls', livekitCallsRouter); // NEW
-  app.use('/api/v1/projects/:projectId/call-features', projectCallFeaturesRouter);
-
+  app.use('/:projectid/call-features', projectCallFeaturesRouter); // CHANGED THIS LINE
   
   console.log('✅ LiveKit routes registered (including calls)');
 } catch (error) {
