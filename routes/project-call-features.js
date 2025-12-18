@@ -1,18 +1,46 @@
-// D:\tiledesk\saaschat-server\routes\project-call-features.js
 const express = require('express');
-const router = express.Router();
-const ProjectCallService = require('../services/project-call-service');
+const router = express.Router({ mergeParams: true });
 
 module.exports = function(db) {
-  const projectCallService = new ProjectCallService(db);
+  console.log('PROJECT-CALL-FEATURES: Router factory called, db provided:', !!db);
+  
+  // If db is not provided, try to get it from mongoose
+  if (!db) {
+    try {
+      const mongoose = require('mongoose');
+      db = mongoose.connection.db;
+      console.log('PROJECT-CALL-FEATURES: Got db from mongoose.connection.db:', !!db);
+    } catch (error) {
+      console.warn('PROJECT-CALL-FEATURES: Could not get mongoose connection:', error.message);
+    }
+  }
+
+  let projectCallService;
+  try {
+    const ProjectCallService = require('../services/project-call-service');
+    projectCallService = new ProjectCallService(db);
+    console.log('PROJECT-CALL-FEATURES: Service initialized successfully');
+  } catch (error) {
+    console.error('PROJECT-CALL-FEATURES: Failed to initialize ProjectCallService:', error);
+    projectCallService = null;
+  }
 
   /**
-   * GET /api/v1/projects/:projectId/call-features
+   * GET /:projectid/call-features
    * Get call features for a project
    */
-  router.get('/:projectId', async (req, res) => {
+  router.get('/', async (req, res) => {
     try {
-      const projectId = req.params.projectid;  // lowercase 'd'
+      const projectId = req.params.projectid;
+      console.log('PROJECT-CALL-FEATURES: Getting features for project:', projectId);
+      
+      if (!projectCallService) {
+        return res.status(503).json({
+          success: false,
+          error: 'Service unavailable',
+          message: 'Project call service is not initialized'
+        });
+      }
       
       const result = await projectCallService.getProjectCallFeatures(projectId);
       
@@ -20,7 +48,7 @@ module.exports = function(db) {
         res.json({
           success: true,
           data: result.data,
-          message: result.message
+          message: result.message || 'Project call features retrieved'
         });
       } else {
         res.status(500).json({
@@ -28,24 +56,33 @@ module.exports = function(db) {
           error: result.error
         });
       }
-      
     } catch (error) {
-      console.error('Error in GET call-features:', error);
+      console.error('PROJECT-CALL-FEATURES: Error getting call features:', error);
       res.status(500).json({
         success: false,
-        error: error.message
+        error: error.message,
+        message: 'Failed to retrieve project call features'
       });
     }
   });
 
   /**
-   * PUT /api/v1/projects/:projectId/call-features
+   * PUT /:projectid/call-features
    * Update call features for a project
    */
-  router.put('/:projectId', async (req, res) => {
+  router.put('/', async (req, res) => {
     try {
-      const projectId = req.params.projectid;  // lowercase 'd'
+      const projectId = req.params.projectid;
       const updates = req.body;
+      console.log('PROJECT-CALL-FEATURES: Updating features for project:', projectId, updates);
+      
+      if (!projectCallService) {
+        return res.status(503).json({
+          success: false,
+          error: 'Service unavailable',
+          message: 'Project call service is not initialized'
+        });
+      }
       
       // Get current features
       const currentResult = await projectCallService.getProjectCallFeatures(projectId, false);
@@ -93,7 +130,7 @@ module.exports = function(db) {
       });
       
     } catch (error) {
-      console.error('Error in PUT call-features:', error);
+      console.error('PROJECT-CALL-FEATURES: Error updating call features:', error);
       res.status(500).json({
         success: false,
         error: error.message
@@ -102,13 +139,22 @@ module.exports = function(db) {
   });
 
   /**
-   * POST /api/v1/projects/:projectId/call-features/sync
+   * POST /:projectid/call-features/sync
    * Sync project features to all agents
    */
-  router.post('/:projectId/sync', async (req, res) => {
+  router.post('/sync', async (req, res) => {
     try {
-      const projectId = req.params.projectid;  // lowercase 'd'
+      const projectId = req.params.projectid;
       const { force = false } = req.body;
+      console.log('PROJECT-CALL-FEATURES: Syncing features for project:', projectId);
+      
+      if (!projectCallService) {
+        return res.status(503).json({
+          success: false,
+          error: 'Service unavailable',
+          message: 'Project call service is not initialized'
+        });
+      }
       
       // Get project features
       const result = await projectCallService.getProjectCallFeatures(projectId, false);
@@ -131,7 +177,7 @@ module.exports = function(db) {
       });
       
     } catch (error) {
-      console.error('Error syncing features:', error);
+      console.error('PROJECT-CALL-FEATURES: Error syncing features:', error);
       res.status(500).json({
         success: false,
         error: error.message
@@ -140,12 +186,21 @@ module.exports = function(db) {
   });
 
   /**
-   * GET /api/v1/projects/:projectId/call-features/usage
+   * GET /:projectid/call-features/usage
    * Get usage statistics
    */
-  router.get('/:projectId/usage', async (req, res) => {
+  router.get('/usage', async (req, res) => {
     try {
-      const projectId = req.params.projectid;  // lowercase 'd'
+      const projectId = req.params.projectid;
+      console.log('PROJECT-CALL-FEATURES: Getting usage for project:', projectId);
+      
+      if (!projectCallService) {
+        return res.status(503).json({
+          success: false,
+          error: 'Service unavailable',
+          message: 'Project call service is not initialized'
+        });
+      }
       
       const result = await projectCallService.getProjectCallFeatures(projectId, false);
       if (!result.success) {
@@ -188,7 +243,7 @@ module.exports = function(db) {
       });
       
     } catch (error) {
-      console.error('Error getting usage:', error);
+      console.error('PROJECT-CALL-FEATURES: Error getting usage:', error);
       res.status(500).json({
         success: false,
         error: error.message
@@ -197,13 +252,22 @@ module.exports = function(db) {
   });
 
   /**
-   * POST /api/v1/projects/:projectId/call-features/test-call
+   * POST /:projectid/call-features/test-call
    * Test call functionality
    */
-  router.post('/:projectId/test-call', async (req, res) => {
+  router.post('/test-call', async (req, res) => {
     try {
-      const projectId = req.params.projectid;  // lowercase 'd'
+      const projectId = req.params.projectid;
       const { call_type = 'audio' } = req.body;
+      console.log('PROJECT-CALL-FEATURES: Test call for project:', projectId, call_type);
+      
+      if (!projectCallService) {
+        return res.status(503).json({
+          success: false,
+          error: 'Service unavailable',
+          message: 'Project call service is not initialized'
+        });
+      }
       
       // Check if call is allowed
       const canCall = await projectCallService.canMakeCall(projectId, call_type);
@@ -238,7 +302,7 @@ module.exports = function(db) {
       });
       
     } catch (error) {
-      console.error('Error in test call:', error);
+      console.error('PROJECT-CALL-FEATURES: Error in test call:', error);
       res.status(500).json({
         success: false,
         error: error.message
@@ -247,12 +311,21 @@ module.exports = function(db) {
   });
 
   /**
-   * POST /api/v1/projects/:projectId/call-features/reset-usage
+   * POST /:projectid/call-features/reset-usage
    * Reset usage statistics (admin only)
    */
-  router.post('/:projectId/reset-usage', async (req, res) => {
+  router.post('/reset-usage', async (req, res) => {
     try {
-      const projectId = req.params.projectid;  // lowercase 'd'
+      const projectId = req.params.projectid;
+      console.log('PROJECT-CALL-FEATURES: Reset usage for project:', projectId);
+      
+      if (!projectCallService) {
+        return res.status(503).json({
+          success: false,
+          error: 'Service unavailable',
+          message: 'Project call service is not initialized'
+        });
+      }
       
       const resetResult = await projectCallService.resetMonthlyUsage(projectId);
       
@@ -270,7 +343,7 @@ module.exports = function(db) {
       }
       
     } catch (error) {
-      console.error('Error resetting usage:', error);
+      console.error('PROJECT-CALL-FEATURES: Error resetting usage:', error);
       res.status(500).json({
         success: false,
         error: error.message

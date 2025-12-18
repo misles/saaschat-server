@@ -537,6 +537,8 @@ app.use('/w', widgetsLoader);
 
 // === ADD THIS CODE AFTER widgetsLoader routes ===
 // LiveKit Routes
+let projectCallFeaturesRouter; // Declare it globally so we can use it later
+
 try {
   // Get db connection - it might not be ready immediately
   const db = mongoose.connection.db;
@@ -548,14 +550,16 @@ try {
   const livekitSyncRouter = require('./routes/livekit/sync-agent')(db);
   const livekitFeaturesRouter = require('./routes/livekit/features')(db);
   const livekitCallsRouter = require('./routes/livekit/calls')(db); // NEW
-  const projectCallFeaturesRouter = require('./routes/project-call-features')(db);
+  
+  // Create the router but don't mount it yet
+  projectCallFeaturesRouter = require('./routes/project-call-features')(db);
 
   app.use('/api/livekit', livekitSyncRouter);
   app.use('/api/livekit', livekitFeaturesRouter);
   app.use('/api/livekit/calls', livekitCallsRouter); // NEW
-  app.use('/:projectid/call-features', projectCallFeaturesRouter); // CHANGED THIS LINE
   
   console.log('✅ LiveKit routes registered (including calls)');
+  
 } catch (error) {
   console.error('❌ Error registering LiveKit routes:', error.message);
 }
@@ -593,8 +597,16 @@ if (modulesManager) {
 
 app.use('/:projectid/', [projectIdSetter, projectSetter, IPFilter.projectIpFilter, IPFilter.projectIpFilterDeny, IPFilter.decodeJwt, IPFilter.projectBanUserFilter]);
 
+// Mount project-call-features AFTER the project middleware
+if (projectCallFeaturesRouter) {
+  app.use('/:projectid/call-features', projectCallFeaturesRouter);
+  console.log('✅ Project call features route mounted');
+} else {
+  console.warn('⚠️ Project call features router not available');
+}
 
 app.use('/:projectid/authtestWithRoleCheck', [passport.authenticate(['basic', 'jwt'], { session: false }), validtoken], authtestWithRoleCheck);
+
 
 app.use('/:projectid/project_users_test', [passport.authenticate(['basic', 'jwt'], { session: false }), validtoken, roleChecker.hasRoleOrTypes('agent', ['bot','subscription'])], project_users_test);
 
