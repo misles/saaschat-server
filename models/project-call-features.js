@@ -1,4 +1,3 @@
-// D:\tiledesk\saaschat-server\models\project-call-features.js
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 

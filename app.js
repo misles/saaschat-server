@@ -548,14 +548,14 @@ try {
   
   const livekitSyncRouter = require('./routes/livekit/sync-agent')(db);
   const livekitFeaturesRouter = require('./routes/livekit/features')(db);
-  const livekitCallsRouter = require('./routes/livekit/calls')(db); // NEW
+  const livekitCallsRouter = require('./routes/livekit/calls')(db);
   
   // Create the router but don't mount it yet
   const projectCallFeaturesRouter = require('./routes/project-call-features')(db);
 
   app.use('/api/livekit', livekitSyncRouter);
   app.use('/api/livekit', livekitFeaturesRouter);
-  app.use('/api/livekit/calls', livekitCallsRouter); // NEW
+  app.use('/api/livekit/calls', livekitCallsRouter);
   
   console.log('✅ LiveKit routes registered (including calls)');
   
@@ -597,7 +597,12 @@ if (modulesManager) {
 app.use('/:projectid/', [projectIdSetter, projectSetter, IPFilter.projectIpFilter, IPFilter.projectIpFilterDeny, IPFilter.decodeJwt, IPFilter.projectBanUserFilter]);
 
 // Mount project-call-features AFTER the project middleware
-app.use('/:projectid/call-features', projectCallFeaturesRouter);
+if (projectCallFeaturesRouter) {
+  app.use('/:projectid/call-features', projectCallFeaturesRouter);
+  console.log('✅ Project call features route mounted');
+} else {
+  console.warn('⚠️ Project call features router not available');
+}
 
 app.use('/:projectid/authtestWithRoleCheck', [passport.authenticate(['basic', 'jwt'], { session: false }), validtoken], authtestWithRoleCheck);
 
