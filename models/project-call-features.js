@@ -12,9 +12,9 @@ const projectCallFeaturesSchema = new Schema({
   // Project-level settings (override agent features)
   settings: {
     // Feature toggles
-    enabled: { type: Boolean, default: false },
-    audio_calls: { type: Boolean, default: true },
-    video_calls: { type: Boolean, default: false },
+    enabled: { type: Boolean },
+    audio_calls: { type: Boolean },
+    video_calls: { type: Boolean },
     screen_sharing: { type: Boolean, default: false },
     call_recording: { type: Boolean, default: false },
     
