@@ -27,6 +27,7 @@ require('./middleware/passport')(passport);
 var config = require('./config/database');
 var cors = require('cors');
 var Project = require("./models/project");
+var ProjectCallFeatures = require("./models/project-call-features");
 var validtoken = require('./middleware/valid-token');
 var roleChecker = require('./middleware/has-role');
 
@@ -537,8 +538,6 @@ app.use('/w', widgetsLoader);
 
 // === ADD THIS CODE AFTER widgetsLoader routes ===
 // LiveKit Routes
-let projectCallFeaturesRouter; // Declare it globally so we can use it later
-
 try {
   // Get db connection - it might not be ready immediately
   const db = mongoose.connection.db;
@@ -552,7 +551,7 @@ try {
   const livekitCallsRouter = require('./routes/livekit/calls')(db); // NEW
   
   // Create the router but don't mount it yet
-  projectCallFeaturesRouter = require('./routes/project-call-features')(db);
+  const projectCallFeaturesRouter = require('./routes/project-call-features')(db);
 
   app.use('/api/livekit', livekitSyncRouter);
   app.use('/api/livekit', livekitFeaturesRouter);
@@ -598,12 +597,7 @@ if (modulesManager) {
 app.use('/:projectid/', [projectIdSetter, projectSetter, IPFilter.projectIpFilter, IPFilter.projectIpFilterDeny, IPFilter.decodeJwt, IPFilter.projectBanUserFilter]);
 
 // Mount project-call-features AFTER the project middleware
-if (projectCallFeaturesRouter) {
-  app.use('/:projectid/call-features', projectCallFeaturesRouter);
-  console.log('✅ Project call features route mounted');
-} else {
-  console.warn('⚠️ Project call features router not available');
-}
+app.use('/:projectid/call-features', projectCallFeaturesRouter);
 
 app.use('/:projectid/authtestWithRoleCheck', [passport.authenticate(['basic', 'jwt'], { session: false }), validtoken], authtestWithRoleCheck);
 

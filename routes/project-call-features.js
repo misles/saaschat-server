@@ -2,45 +2,49 @@ const express = require('express');
 const router = express.Router({ mergeParams: true });
 
 module.exports = function(db) {
-  console.log('PROJECT-CALL-FEATURES: Router factory called, db provided:', !!db);
+  console.log('PROJECT-CALL-FEATURES: Router factory initialized');
   
-  // If db is not provided, try to get it from mongoose
-  if (!db) {
-    try {
-      const mongoose = require('mongoose');
-      db = mongoose.connection.db;
-      console.log('PROJECT-CALL-FEATURES: Got db from mongoose.connection.db:', !!db);
-    } catch (error) {
-      console.warn('PROJECT-CALL-FEATURES: Could not get mongoose connection:', error.message);
-    }
-  }
-
+  // Import dependencies
+  const passport = require('passport');
+  const validtoken = require('../middleware/valid-token');
+  const roleChecker = require('../middleware/has-role');
+  
   let projectCallService;
   try {
     const ProjectCallService = require('../services/project-call-service');
     projectCallService = new ProjectCallService(db);
-    console.log('PROJECT-CALL-FEATURES: Service initialized successfully');
+    console.log('PROJECT-CALL-FEATURES: ✅ Service initialized successfully');
   } catch (error) {
-    console.error('PROJECT-CALL-FEATURES: Failed to initialize ProjectCallService:', error);
+    console.error('PROJECT-CALL-FEATURES: ❌ Failed to initialize ProjectCallService:', error.message);
     projectCallService = null;
   }
+
+  // Helper function to handle service unavailable
+  const serviceCheck = (req, res, next) => {
+    if (!projectCallService) {
+      return res.status(503).json({
+        success: false,
+        error: 'Service unavailable',
+        message: 'Project call service is not initialized'
+      });
+    }
+    next();
+  };
 
   /**
    * GET /:projectid/call-features
    * Get call features for a project
+   * Authentication: Agent or higher
    */
-  router.get('/', async (req, res) => {
+  router.get('/', [
+    passport.authenticate(['basic', 'jwt'], { session: false }),
+    validtoken,
+    roleChecker.hasRoleOrTypes('agent', ['bot', 'subscription']),
+    serviceCheck
+  ], async (req, res) => {
     try {
       const projectId = req.params.projectid;
-      console.log('PROJECT-CALL-FEATURES: Getting features for project:', projectId);
-      
-      if (!projectCallService) {
-        return res.status(503).json({
-          success: false,
-          error: 'Service unavailable',
-          message: 'Project call service is not initialized'
-        });
-      }
+      console.log('PROJECT-CALL-FEATURES: GET features for project:', projectId);
       
       const result = await projectCallService.getProjectCallFeatures(projectId);
       
@@ -57,7 +61,7 @@ module.exports = function(db) {
         });
       }
     } catch (error) {
-      console.error('PROJECT-CALL-FEATURES: Error getting call features:', error);
+      console.error('PROJECT-CALL-FEATURES: ❌ Error getting call features:', error.message);
       res.status(500).json({
         success: false,
         error: error.message,
@@ -69,118 +73,49 @@ module.exports = function(db) {
   /**
    * PUT /:projectid/call-features
    * Update call features for a project
+   * Authentication: Admin only
    */
-  router.put('/', async (req, res) => {
+  router.put('/', [
+    passport.authenticate(['basic', 'jwt'], { session: false }),
+    validtoken,
+    roleChecker.hasRole('admin'),
+    serviceCheck
+  ], async (req, res) => {
     try {
       const projectId = req.params.projectid;
       const updates = req.body;
-      console.log('PROJECT-CALL-FEATURES: Updating features for project:', projectId, updates);
       
-      if (!projectCallService) {
-        return res.status(503).json({
+      console.log('PROJECT-CALL-FEATURES: PUT update for project:', projectId);
+      
+      // Validate updates
+      if (!updates || (typeof updates !== 'object')) {
+        return res.status(400).json({
           success: false,
-          error: 'Service unavailable',
-          message: 'Project call service is not initialized'
+          error: 'Invalid update data',
+          message: 'Request body must contain update data'
         });
       }
       
-      // Get current features
-      const currentResult = await projectCallService.getProjectCallFeatures(projectId, false);
-      if (!currentResult.success) {
-        return res.status(404).json({
+      const result = await projectCallService.updateProjectCallFeatures(projectId, updates);
+      
+      if (result.success) {
+        res.json({
+          success: true,
+          data: result.data,
+          message: result.message || 'Project call features updated successfully'
+        });
+      } else {
+        res.status(500).json({
           success: false,
-          error: 'Project not found'
+          error: result.error
         });
       }
-      
-      // Update settings
-      const projectFeatures = currentResult.data;
-      
-      if (updates.settings) {
-        // Merge settings
-        projectFeatures.settings = {
-          ...projectFeatures.settings,
-          ...updates.settings,
-          updated_at: new Date()
-        };
-      }
-      
-      if (updates.sync_with_agents !== undefined) {
-        projectFeatures.sync_with_agents = updates.sync_with_agents;
-      }
-      
-      if (updates.auto_sync_new_agents !== undefined) {
-        projectFeatures.auto_sync_new_agents = updates.auto_sync_new_agents;
-      }
-      
-      // Save updates
-      await projectFeatures.save();
-      
-      // Auto-sync to agents if enabled
-      let syncResult = null;
-      if (projectFeatures.sync_with_agents && updates.settings) {
-        syncResult = await projectCallService.syncToAgents(projectId, projectFeatures);
-      }
-      
-      res.json({
-        success: true,
-        data: projectFeatures,
-        sync_result: syncResult,
-        message: 'Call features updated successfully'
-      });
-      
     } catch (error) {
-      console.error('PROJECT-CALL-FEATURES: Error updating call features:', error);
+      console.error('PROJECT-CALL-FEATURES: ❌ Error updating call features:', error.message);
       res.status(500).json({
         success: false,
-        error: error.message
-      });
-    }
-  });
-
-  /**
-   * POST /:projectid/call-features/sync
-   * Sync project features to all agents
-   */
-  router.post('/sync', async (req, res) => {
-    try {
-      const projectId = req.params.projectid;
-      const { force = false } = req.body;
-      console.log('PROJECT-CALL-FEATURES: Syncing features for project:', projectId);
-      
-      if (!projectCallService) {
-        return res.status(503).json({
-          success: false,
-          error: 'Service unavailable',
-          message: 'Project call service is not initialized'
-        });
-      }
-      
-      // Get project features
-      const result = await projectCallService.getProjectCallFeatures(projectId, false);
-      if (!result.success) {
-        return res.status(404).json({
-          success: false,
-          error: 'Project not found'
-        });
-      }
-      
-      const syncResult = await projectCallService.syncToAgents(projectId, result.data);
-      
-      res.json({
-        success: true,
-        project_id: projectId,
-        result: syncResult,
-        message: syncResult.success ? 
-          `Synced features to ${syncResult.results.synced} agents` :
-          'Sync failed'
-      });
-      
-    } catch (error) {
-      console.error('PROJECT-CALL-FEATURES: Error syncing features:', error);
-      res.status(500).json({
-        success: false,
-        error: error.message
+        error: error.message,
+        message: 'Failed to update project call features'
       });
     }
   });
@@ -188,65 +123,62 @@ module.exports = function(db) {
   /**
    * GET /:projectid/call-features/usage
    * Get usage statistics
+   * Authentication: Agent or higher
    */
-  router.get('/usage', async (req, res) => {
+  router.get('/usage', [
+    passport.authenticate(['basic', 'jwt'], { session: false }),
+    validtoken,
+    roleChecker.hasRoleOrTypes('agent', ['bot', 'subscription']),
+    serviceCheck
+  ], async (req, res) => {
     try {
       const projectId = req.params.projectid;
-      console.log('PROJECT-CALL-FEATURES: Getting usage for project:', projectId);
-      
-      if (!projectCallService) {
-        return res.status(503).json({
-          success: false,
-          error: 'Service unavailable',
-          message: 'Project call service is not initialized'
-        });
-      }
+      console.log('PROJECT-CALL-FEATURES: GET usage for project:', projectId);
       
       const result = await projectCallService.getProjectCallFeatures(projectId, false);
-      if (!result.success) {
-        return res.status(404).json({
-          success: false,
-          error: 'Project not found'
+      
+      if (result.success) {
+        const features = result.data;
+        const settings = features.settings || {};
+        const usage = features.usage || {};
+        
+        const usageData = {
+          current_month: {
+            calls: usage.calls_this_month || 0,
+            minutes: usage.total_call_minutes || 0,
+            concurrent_now: usage.concurrent_calls_now || 0
+          },
+          limits: {
+            max_concurrent: settings.max_concurrent_calls || 1,
+            max_monthly: settings.monthly_call_limit || 100,
+            max_duration: settings.max_call_duration || 1800
+          },
+          remaining: {
+            calls: settings.monthly_call_limit > 0 ? 
+              Math.max(0, (settings.monthly_call_limit || 100) - (usage.calls_this_month || 0)) : 
+              'unlimited',
+            concurrent: Math.max(0, (settings.max_concurrent_calls || 1) - (usage.concurrent_calls_now || 0))
+          },
+          last_reset: usage.last_reset_date || new Date(),
+          next_reset: new Date(usage.last_reset_date || new Date()).setMonth(
+            new Date(usage.last_reset_date || new Date()).getMonth() + 1
+          )
+        };
+        
+        res.json({
+          success: true,
+          data: usageData,
+          message: 'Usage statistics retrieved'
         });
+      } else {
+        res.status(500).json(result);
       }
-      
-      // Calculate remaining calls
-      const projectFeatures = result.data;
-      const settings = projectFeatures.settings;
-      const usage = projectFeatures.usage;
-      
-      const usageData = {
-        current_month: {
-          calls: usage.calls_this_month,
-          minutes: usage.total_call_minutes,
-          concurrent_now: usage.concurrent_calls_now
-        },
-        limits: {
-          max_concurrent: settings.max_concurrent_calls,
-          max_monthly: settings.monthly_call_limit,
-          max_duration: settings.max_call_duration
-        },
-        remaining: {
-          calls: settings.monthly_call_limit > 0 ? 
-            Math.max(0, settings.monthly_call_limit - usage.calls_this_month) : 
-            'unlimited',
-          concurrent: Math.max(0, settings.max_concurrent_calls - usage.concurrent_calls_now)
-        },
-        last_reset: usage.last_reset_date,
-        next_reset: new Date(usage.last_reset_date).setMonth(new Date(usage.last_reset_date).getMonth() + 1)
-      };
-      
-      res.json({
-        success: true,
-        data: usageData,
-        message: 'Usage statistics retrieved'
-      });
-      
     } catch (error) {
-      console.error('PROJECT-CALL-FEATURES: Error getting usage:', error);
+      console.error('PROJECT-CALL-FEATURES: ❌ Error getting usage:', error.message);
       res.status(500).json({
         success: false,
-        error: error.message
+        error: error.message,
+        message: 'Failed to retrieve usage statistics'
       });
     }
   });
@@ -254,22 +186,20 @@ module.exports = function(db) {
   /**
    * POST /:projectid/call-features/test-call
    * Test call functionality
+   * Authentication: Admin only
    */
-  router.post('/test-call', async (req, res) => {
+  router.post('/test-call', [
+    passport.authenticate(['basic', 'jwt'], { session: false }),
+    validtoken,
+    roleChecker.hasRole('admin'),
+    serviceCheck
+  ], async (req, res) => {
     try {
       const projectId = req.params.projectid;
       const { call_type = 'audio' } = req.body;
-      console.log('PROJECT-CALL-FEATURES: Test call for project:', projectId, call_type);
       
-      if (!projectCallService) {
-        return res.status(503).json({
-          success: false,
-          error: 'Service unavailable',
-          message: 'Project call service is not initialized'
-        });
-      }
+      console.log('PROJECT-CALL-FEATURES: Test call for project:', projectId, 'type:', call_type);
       
-      // Check if call is allowed
       const canCall = await projectCallService.canMakeCall(projectId, call_type);
       
       if (!canCall.allowed) {
@@ -300,9 +230,8 @@ module.exports = function(db) {
         },
         message: 'Test call simulation successful'
       });
-      
     } catch (error) {
-      console.error('PROJECT-CALL-FEATURES: Error in test call:', error);
+      console.error('PROJECT-CALL-FEATURES: ❌ Error in test call:', error.message);
       res.status(500).json({
         success: false,
         error: error.message
@@ -312,20 +241,18 @@ module.exports = function(db) {
 
   /**
    * POST /:projectid/call-features/reset-usage
-   * Reset usage statistics (admin only)
+   * Reset usage statistics
+   * Authentication: Admin only
    */
-  router.post('/reset-usage', async (req, res) => {
+  router.post('/reset-usage', [
+    passport.authenticate(['basic', 'jwt'], { session: false }),
+    validtoken,
+    roleChecker.hasRole('admin'),
+    serviceCheck
+  ], async (req, res) => {
     try {
       const projectId = req.params.projectid;
       console.log('PROJECT-CALL-FEATURES: Reset usage for project:', projectId);
-      
-      if (!projectCallService) {
-        return res.status(503).json({
-          success: false,
-          error: 'Service unavailable',
-          message: 'Project call service is not initialized'
-        });
-      }
       
       const resetResult = await projectCallService.resetMonthlyUsage(projectId);
       
@@ -341,9 +268,40 @@ module.exports = function(db) {
           error: resetResult.error
         });
       }
-      
     } catch (error) {
-      console.error('PROJECT-CALL-FEATURES: Error resetting usage:', error);
+      console.error('PROJECT-CALL-FEATURES: ❌ Error resetting usage:', error.message);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  });
+
+  /**
+   * POST /:projectid/call-features/sync
+   * Sync project features to agents
+   * Authentication: Admin only
+   */
+  router.post('/sync', [
+    passport.authenticate(['basic', 'jwt'], { session: false }),
+    validtoken,
+    roleChecker.hasRole('admin'),
+    serviceCheck
+  ], async (req, res) => {
+    try {
+      const projectId = req.params.projectid;
+      console.log('PROJECT-CALL-FEATURES: Sync features for project:', projectId);
+      
+      // This would sync features to agents' Supabase profiles
+      // For now, return a placeholder response
+      
+      res.json({
+        success: true,
+        message: 'Sync feature would update agent profiles',
+        note: 'Implementation pending Supabase integration'
+      });
+    } catch (error) {
+      console.error('PROJECT-CALL-FEATURES: ❌ Error syncing features:', error.message);
       res.status(500).json({
         success: false,
         error: error.message
