@@ -1,11 +1,26 @@
-// D:\tiledesk\saaschat-server\services\project-call-service.js
+const mongoose = require('mongoose');
 const LiveKitHelpers = require('../lib/livekit-helpers');
 
 class ProjectCallService {
   constructor(db) {
-    this.db = db;
-    this.livekitHelpers = new LiveKitHelpers(db);
-    this.ProjectCallFeatures = db.models.ProjectCallFeatures;
+    console.log('PROJECT-CALL-SERVICE: Constructor called');
+    
+    // Get the model - it should already be loaded in app.js
+    try {
+      this.ProjectCallFeatures = mongoose.model('ProjectCallFeatures');
+      console.log('PROJECT-CALL-SERVICE: ✅ Model found');
+    } catch (error) {
+      console.log('PROJECT-CALL-SERVICE: ⚠️ Model not found:', error.message);
+      this.ProjectCallFeatures = null;
+    }
+    
+    // Initialize LiveKit helpers if available
+    try {
+      this.livekitHelpers = new LiveKitHelpers(db);
+    } catch (error) {
+      console.log('PROJECT-CALL-SERVICE: LiveKitHelpers not available:', error.message);
+      this.livekitHelpers = null;
+    }
   }
 
   /**
@@ -13,6 +28,17 @@ class ProjectCallService {
    */
   async getProjectCallFeatures(projectId, checkSupabase = true) {
     try {
+      console.log('PROJECT-CALL-SERVICE: Getting features for:', projectId);
+      
+      // If model not available, return error
+      if (!this.ProjectCallFeatures) {
+        return {
+          success: false,
+          error: 'Database model not available',
+          message: 'ProjectCallFeatures model not initialized'
+        };
+      }
+      
       // Get project features from MongoDB
       let projectFeatures = await this.ProjectCallFeatures.findOne({ project_id: projectId });
       
@@ -36,14 +62,20 @@ class ProjectCallService {
           }
         });
         await projectFeatures.save();
+        console.log('PROJECT-CALL-SERVICE: ✅ Default features created for project:', projectId);
       }
       
       // If checking Supabase, verify project has valid subscription
-      if (checkSupabase) {
-        const supabaseCheck = await this.checkProjectSubscription(projectId);
-        if (!supabaseCheck.valid) {
-          // Disable calls if no valid subscription
-          projectFeatures.settings.enabled = false;
+      if (checkSupabase && this.livekitHelpers) {
+        try {
+          const supabaseCheck = await this.checkProjectSubscription(projectId);
+          if (!supabaseCheck.valid) {
+            // Disable calls if no valid subscription
+            projectFeatures.settings.enabled = false;
+            await projectFeatures.save();
+          }
+        } catch (supabaseError) {
+          console.warn('PROJECT-CALL-SERVICE: Supabase check failed:', supabaseError.message);
         }
       }
       
@@ -54,7 +86,7 @@ class ProjectCallService {
       };
       
     } catch (error) {
-      console.error('Error getting project call features:', error);
+      console.error('PROJECT-CALL-SERVICE: ❌ Error getting project call features:', error.message);
       return {
         success: false,
         error: error.message
@@ -63,13 +95,214 @@ class ProjectCallService {
   }
 
   /**
+   * Update project call features
+   */
+  async updateProjectCallFeatures(projectId, updates) {
+    try {
+      console.log('PROJECT-CALL-SERVICE: Updating features for:', projectId);
+      
+      if (!this.ProjectCallFeatures) {
+        return {
+          success: false,
+          error: 'Database model not available'
+        };
+      }
+      
+      // Prepare update data
+      const updateData = { updated_at: new Date() };
+      
+      // Handle nested settings update
+      if (updates.settings) {
+        updateData.$set = { 'settings': updates.settings };
+      } else {
+        updateData.$set = updates;
+      }
+      
+      const result = await this.ProjectCallFeatures.findOneAndUpdate(
+        { project_id: projectId },
+        updateData,
+        { new: true, upsert: true, runValidators: true }
+      );
+      
+      console.log('PROJECT-CALL-SERVICE: ✅ Update successful for project:', projectId);
+      
+      return {
+        success: true,
+        data: result,
+        message: 'Project call features updated'
+      };
+      
+    } catch (error) {
+      console.error('PROJECT-CALL-SERVICE: ❌ Update error:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Check if call can be made (usage limits)
+   */
+  async canMakeCall(projectId, callType = 'audio') {
+    try {
+      const result = await this.getProjectCallFeatures(projectId, false);
+      
+      if (!result.success || !result.data) {
+        return {
+          allowed: false,
+          reason: 'Failed to get project features'
+        };
+      }
+      
+      const projectFeatures = result.data;
+      const settings = projectFeatures.settings;
+      const usage = projectFeatures.usage;
+      
+      // Check if enabled
+      if (!settings.enabled) {
+        return {
+          allowed: false,
+          reason: 'Calls disabled for project'
+        };
+      }
+      
+      // Check specific feature
+      if (callType === 'video' && !settings.video_calls) {
+        return {
+          allowed: false,
+          reason: 'Video calls disabled'
+        };
+      }
+      
+      if (callType === 'screen_share' && !settings.screen_sharing) {
+        return {
+          allowed: false,
+          reason: 'Screen sharing disabled'
+        };
+      }
+      
+      // Check concurrent calls limit
+      if (usage.concurrent_calls_now >= settings.max_concurrent_calls) {
+        return {
+          allowed: false,
+          reason: 'Concurrent call limit reached'
+        };
+      }
+      
+      // Check monthly limit (if not unlimited)
+      if (settings.monthly_call_limit > 0 && 
+          usage.calls_this_month >= settings.monthly_call_limit) {
+        return {
+          allowed: false,
+          reason: 'Monthly call limit reached'
+        };
+      }
+      
+      return {
+        allowed: true,
+        project_features: projectFeatures
+      };
+      
+    } catch (error) {
+      console.error('PROJECT-CALL-SERVICE: ❌ Error checking call permission:', error.message);
+      return {
+        allowed: false,
+        reason: 'Error checking permissions'
+      };
+    }
+  }
+
+  /**
+   * Record call usage
+   */
+  async recordCallUsage(projectId, durationSeconds = 0) {
+    try {
+      await this.ProjectCallFeatures.updateOne(
+        { project_id: projectId },
+        {
+          $inc: {
+            'usage.calls_this_month': 1,
+            'usage.total_call_minutes': Math.ceil(durationSeconds / 60),
+            'usage.concurrent_calls_now': 1
+          },
+          $set: { updated_at: new Date() }
+        }
+      );
+      
+      return { success: true };
+      
+    } catch (error) {
+      console.error('PROJECT-CALL-SERVICE: ❌ Error recording call usage:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * End call (decrement concurrent count)
+   */
+  async endCall(projectId) {
+    try {
+      await this.ProjectCallFeatures.updateOne(
+        { project_id: projectId },
+        {
+          $inc: { 'usage.concurrent_calls_now': -1 },
+          $set: { updated_at: new Date() }
+        }
+      );
+      
+      return { success: true };
+      
+    } catch (error) {
+      console.error('PROJECT-CALL-SERVICE: ❌ Error ending call:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Reset monthly usage
+   */
+  async resetMonthlyUsage(projectId) {
+    try {
+      await this.ProjectCallFeatures.updateOne(
+        { project_id: projectId },
+        {
+          $set: {
+            'usage.calls_this_month': 0,
+            'usage.total_call_minutes': 0,
+            'usage.last_reset_date': new Date(),
+            updated_at: new Date()
+          }
+        }
+      );
+      
+      return { success: true };
+      
+    } catch (error) {
+      console.error('PROJECT-CALL-SERVICE: ❌ Error resetting usage:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
    * Check if project has valid Supabase subscription for calls
    */
   async checkProjectSubscription(projectId) {
     try {
-      // Get project from MongoDB
-      const Project = this.db.models.Project;
-      const project = await Project.findOne({ _id: projectId });
+      // Try to get project model
+      let ProjectModel;
+      try {
+        ProjectModel = mongoose.model('Project');
+      } catch (error) {
+        console.warn('PROJECT-CALL-SERVICE: Project model not available');
+        return {
+          valid: true, // Assume valid if can't check
+          reason: 'Could not check subscription',
+          can_enable: true
+        };
+      }
+      
+      const project = await ProjectModel.findOne({ _id: projectId });
       
       if (!project) {
         return {
@@ -95,7 +328,7 @@ class ProjectCallService {
       };
       
     } catch (error) {
-      console.error('Error checking project subscription:', error);
+      console.error('PROJECT-CALL-SERVICE: ❌ Error checking project subscription:', error.message);
       return {
         valid: false,
         reason: 'Error checking subscription',
@@ -146,231 +379,12 @@ class ProjectCallService {
         video_calls: true,
         screen_sharing: true,
         call_recording: true,
-        max_concurrent_calls: 1000, // from project profile
+        max_concurrent_calls: 1000,
         monthly_call_limit: -1
       }
     };
     
     return plans[planName.toLowerCase()] || plans['free'];
-  }
-
-  /**
-   * Sync project features to all agents in project
-   */
-  async syncToAgents(projectId, features) {
-    try {
-      // Get all agents in project
-      const ProjectUser = this.db.models.ProjectUser;
-      const agents = await ProjectUser.find({ 
-        project_id: projectId,
-        role: { $in: ['agent', 'admin', 'owner'] }
-      });
-      
-      const results = {
-        total_agents: agents.length,
-        synced: 0,
-        failed: 0,
-        details: []
-      };
-      
-      // Sync to each agent's Supabase record
-      for (const agent of agents) {
-        try {
-          const agentId = agent.user_id || agent._id;
-          
-          // Get current agent features from Supabase
-          const supabaseData = await this.livekitHelpers.fetchFromSupabase(agentId);
-          
-          // Merge project features with agent's existing features
-          const mergedFeatures = {
-            ...supabaseData.features,
-            ...features.settings,
-            // Override with project settings
-            enabled: features.settings.enabled,
-            audio_calls: features.settings.audio_calls,
-            video_calls: features.settings.video_calls,
-            screen_sharing: features.settings.screen_sharing,
-            call_recording: features.settings.call_recording
-          };
-          
-          // Update Supabase
-          await this.livekitHelpers.updateSupabaseFeatures(
-            agentId,
-            supabaseData.plan || 'custom',
-            mergedFeatures
-          );
-          
-          // Update Tiledesk cache
-          await this.livekitHelpers.syncToTiledesk(
-            agentId,
-            supabaseData.plan || 'custom',
-            mergedFeatures
-          );
-          
-          results.synced++;
-          results.details.push({
-            agent_id: agentId,
-            status: 'synced',
-            features: Object.keys(mergedFeatures)
-          });
-          
-        } catch (agentError) {
-          results.failed++;
-          results.details.push({
-            agent_id: agent.user_id || agent._id,
-            status: 'failed',
-            error: agentError.message
-          });
-        }
-      }
-      
-      // Update project sync timestamp
-      await this.ProjectCallFeatures.updateOne(
-        { project_id: projectId },
-        { $set: { last_synced_at: new Date() } }
-      );
-      
-      return {
-        success: true,
-        project_id: projectId,
-        results: results,
-        message: `Synced features to ${results.synced} agents`
-      };
-      
-    } catch (error) {
-      console.error('Error syncing to agents:', error);
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  }
-
-  /**
-   * Check if call can be made (usage limits)
-   */
-  async canMakeCall(projectId, callType = 'audio') {
-    try {
-      const projectFeatures = await this.getProjectCallFeatures(projectId);
-      
-      if (!projectFeatures.success || !projectFeatures.data.settings.enabled) {
-        return {
-          allowed: false,
-          reason: 'Calls disabled for project'
-        };
-      }
-      
-      // Check specific feature
-      const featureKey = callType === 'video' ? 'video_calls' : 'audio_calls';
-      if (!projectFeatures.data.settings[featureKey]) {
-        return {
-          allowed: false,
-          reason: `${callType} calls disabled`
-        };
-      }
-      
-      // Check concurrent calls limit
-      if (projectFeatures.data.usage.concurrent_calls_now >= 
-          projectFeatures.data.settings.max_concurrent_calls) {
-        return {
-          allowed: false,
-          reason: 'Concurrent call limit reached'
-        };
-      }
-      
-      // Check monthly limit (if not unlimited)
-      if (projectFeatures.data.settings.monthly_call_limit > 0 &&
-          projectFeatures.data.usage.calls_this_month >= 
-          projectFeatures.data.settings.monthly_call_limit) {
-        return {
-          allowed: false,
-          reason: 'Monthly call limit reached'
-        };
-      }
-      
-      return {
-        allowed: true,
-        project_features: projectFeatures.data
-      };
-      
-    } catch (error) {
-      console.error('Error checking call permission:', error);
-      return {
-        allowed: false,
-        reason: 'Error checking permissions'
-      };
-    }
-  }
-
-  /**
-   * Record call usage
-   */
-  async recordCallUsage(projectId, durationSeconds = 0) {
-    try {
-      await this.ProjectCallFeatures.updateOne(
-        { project_id: projectId },
-        {
-          $inc: {
-            'usage.calls_this_month': 1,
-            'usage.total_call_minutes': Math.ceil(durationSeconds / 60),
-            'usage.concurrent_calls_now': 1
-          },
-          $set: { updated_at: new Date() }
-        }
-      );
-      
-      return { success: true };
-      
-    } catch (error) {
-      console.error('Error recording call usage:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  /**
-   * End call (decrement concurrent count)
-   */
-  async endCall(projectId) {
-    try {
-      await this.ProjectCallFeatures.updateOne(
-        { project_id: projectId },
-        {
-          $inc: { 'usage.concurrent_calls_now': -1 },
-          $set: { updated_at: new Date() }
-        }
-      );
-      
-      return { success: true };
-      
-    } catch (error) {
-      console.error('Error ending call:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  /**
-   * Reset monthly usage
-   */
-  async resetMonthlyUsage(projectId) {
-    try {
-      await this.ProjectCallFeatures.updateOne(
-        { project_id: projectId },
-        {
-          $set: {
-            'usage.calls_this_month': 0,
-            'usage.total_call_minutes': 0,
-            'usage.last_reset_date': new Date(),
-            updated_at: new Date()
-          }
-        }
-      );
-      
-      return { success: true };
-      
-    } catch (error) {
-      console.error('Error resetting usage:', error);
-      return { success: false, error: error.message };
-    }
   }
 }
 
