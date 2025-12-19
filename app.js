@@ -109,6 +109,7 @@ tdCache.connect();
 
 // ROUTES DECLARATION
 var troubleshooting = require('./routes/troubleshooting');
+var livekit = require('./routes/livekit');
 var auth = require('./routes/auth');
 var authtest = require('./routes/authtest');
 var authtestWithRoleCheck = require('./routes/authtestWithRoleCheck');
@@ -461,6 +462,8 @@ if (process.env.ROUTELOGGER_ENABLED==="true") {
 app.get('/', function (req, res) {
   res.send('Hello from Tiledesk server. It\'s UP. See the documentation here http://developer.tiledesk.com');
 });
+
+app.use('/livekit', livekit);
   
 
 
@@ -597,6 +600,8 @@ if (modulesManager) {
 app.use('/:projectid/', [projectIdSetter, projectSetter, IPFilter.projectIpFilter, IPFilter.projectIpFilterDeny, IPFilter.decodeJwt, IPFilter.projectBanUserFilter]);
 
 // Mount project-call-features AFTER the project middleware
+// Create and mount project-call-features route
+const projectCallFeaturesRouter = require("./routes/project-call-features")(mongoose.connection.db);
 if (projectCallFeaturesRouter) {
   app.use('/:projectid/call-features', projectCallFeaturesRouter);
   console.log('✅ Project call features route mounted');
