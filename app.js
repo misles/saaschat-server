@@ -464,6 +464,8 @@ app.get('/', function (req, res) {
 });
 
 app.use('/livekit', livekit);
+
+app.use('/livekit', livekit);
   
 
 

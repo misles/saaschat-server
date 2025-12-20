@@ -1,4 +1,4 @@
-// services/project-call-service.js - CORRECTED VERSION
+// services/project-call-service.js - COMPLETE VERSION WITH FIXED MERGE LOGIC
 const mongoose = require("mongoose");
 
 class ProjectCallService {
@@ -102,7 +102,7 @@ class ProjectCallService {
 
   async updateProjectCallFeatures(projectId, updates) {
     console.log("PROJECT-CALL-SERVICE: Updating features for:", projectId);
-    console.log("PROJECT-CALL-SERVICE: Updates:", updates);
+    console.log("PROJECT-CALL-SERVICE: Updates:", JSON.stringify(updates, null, 2));
     
     if (!this.ProjectCallFeatures) {
       return {
@@ -114,38 +114,52 @@ class ProjectCallService {
     try {
       // Get current document first
       const current = await this.ProjectCallFeatures.findOne({ project_id: projectId });
+      console.log("PROJECT-CALL-SERVICE: Current exists:", !!current);
       
       // Start with update timestamp
-      let updateObj = { updated_at: new Date() };
+      const setOperation = { updated_at: new Date() };
       
-      // Handle settings merge
-      if (updates.settings) {
+      // Handle settings merge with dot notation
+      if (updates.settings && typeof updates.settings === "object") {
+        let mergedSettings = {};
+        
+        // Get current settings if they exist
         if (current && current.settings) {
-          // Get current settings (handle Mongoose document)
           const currentSettings = current.settings.toObject ? current.settings.toObject() : current.settings;
-          updateObj.settings = { ...currentSettings, ...updates.settings };
-        } else {
-          updateObj.settings = updates.settings;
+          mergedSettings = { ...currentSettings };
+          console.log("PROJECT-CALL-SERVICE: Current settings loaded");
+        }
+        
+        // Merge with new settings
+        mergedSettings = { ...mergedSettings, ...updates.settings };
+        console.log("PROJECT-CALL-SERVICE: Merged settings:", JSON.stringify(mergedSettings, null, 2));
+        
+        // Use dot notation for ALL settings fields
+        for (const [key, value] of Object.entries(mergedSettings)) {
+          setOperation[`settings.${key}`] = value;
         }
       }
       
-      // Handle top-level fields (not in settings)
+      // Handle top-level fields
       for (const key in updates) {
         if (key !== "settings" && key !== "_id" && key !== "__v") {
-          updateObj[key] = updates[key];
+          setOperation[key] = updates[key];
         }
       }
       
-      console.log("PROJECT-CALL-SERVICE: Final update object:", updateObj);
+      console.log("PROJECT-CALL-SERVICE: Final $set operation:", JSON.stringify(setOperation, null, 2));
       
-      // Handle the update
+      // Perform update with dot notation
       const result = await this.ProjectCallFeatures.findOneAndUpdate(
         { project_id: projectId },
-        { $set: updateObj },
-        { new: true, upsert: true }
+        { $set: setOperation },
+        { new: true, upsert: true, setDefaultsOnInsert: false, strict: false, runValidators: false }
       );
       
+      const resultSettings = result.settings.toObject ? result.settings.toObject() : result.settings;
       console.log("PROJECT-CALL-SERVICE: ✅ Update successful");
+      console.log("PROJECT-CALL-SERVICE: Result settings keys:", Object.keys(resultSettings));
+      console.log("PROJECT-CALL-SERVICE: Result has custom fields:", Object.keys(resultSettings).filter(k => !["enabled","audio_calls","video_calls","screen_sharing","call_recording","max_concurrent_calls","max_call_duration","monthly_call_limit","video_quality","audio_quality","turn_servers","show_call_button","require_precall_test"].includes(k)));
       return {
         success: true,
         data: result,
@@ -157,6 +171,243 @@ class ProjectCallService {
         success: false,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Check if project has valid subscription (from original code)
+   */
+  async checkProjectSubscription(projectId) {
+    try {
+      // Try to get Project model
+      let ProjectModel;
+      try {
+        ProjectModel = mongoose.model("Project");
+      } catch (e) {
+        return {
+          valid: true, // Assume valid if can"t check
+          reason: "Could not verify subscription",
+          can_enable: true
+        };
+      }
+      
+      const project = await ProjectModel.findOne({ _id: projectId });
+      
+      if (!project) {
+        return {
+          valid: false,
+          reason: "Project not found",
+          can_enable: false
+        };
+      }
+      
+      // Check project profile for plan info
+      const planName = project.profile?.name || "free";
+      const planFeatures = this.getPlanFeatures(planName);
+      
+      return {
+        valid: true,
+        plan: planName,
+        features: planFeatures,
+        can_enable: planFeatures.allows_calls
+      };
+      
+    } catch (error) {
+      console.error("PROJECT-CALL-SERVICE: Error checking subscription:", error);
+      return {
+        valid: false,
+        reason: "Error checking subscription",
+        can_enable: false
+      };
+    }
+  }
+
+  /**
+   * Map plan names to call features (from original code)
+   */
+  getPlanFeatures(planName) {
+    const plans = {
+      "free": {
+        allows_calls: false,
+        audio_calls: false,
+        video_calls: false,
+        max_concurrent_calls: 0,
+        monthly_call_limit: 0
+      },
+      "basic": {
+        allows_calls: true,
+        audio_calls: true,
+        video_calls: false,
+        max_concurrent_calls: 1,
+        monthly_call_limit: 100
+      },
+      "pro": {
+        allows_calls: true,
+        audio_calls: true,
+        video_calls: true,
+        screen_sharing: true,
+        max_concurrent_calls: 2,
+        monthly_call_limit: 500
+      },
+      "enterprise": {
+        allows_calls: true,
+        audio_calls: true,
+        video_calls: true,
+        screen_sharing: true,
+        call_recording: true,
+        max_concurrent_calls: 10,
+        monthly_call_limit: -1
+      },
+      "custom": {
+        allows_calls: true,
+        audio_calls: true,
+        video_calls: true,
+        screen_sharing: true,
+        call_recording: true,
+        max_concurrent_calls: 1000,
+        monthly_call_limit: -1
+      }
+    };
+    
+    return plans[planName.toLowerCase()] || plans["free"];
+  }
+
+  /**
+   * Check if call can be made (from original code)
+   */
+  async canMakeCall(projectId, callType = "audio") {
+    try {
+      const projectFeatures = await this.getProjectCallFeatures(projectId);
+      
+      if (!projectFeatures.success || !projectFeatures.data.settings.enabled) {
+        return {
+          allowed: false,
+          reason: "Calls disabled for project"
+        };
+      }
+      
+      // Check specific feature
+      const featureKey = callType === "video" ? "video_calls" : "audio_calls";
+      if (!projectFeatures.data.settings[featureKey]) {
+        return {
+          allowed: false,
+          reason: `${callType} calls disabled`
+        };
+      }
+      
+      // Check concurrent calls limit
+      if (projectFeatures.data.usage.concurrent_calls_now >= 
+          projectFeatures.data.settings.max_concurrent_calls) {
+        return {
+          allowed: false,
+          reason: "Concurrent call limit reached"
+        };
+      }
+      
+      // Check monthly limit (if not unlimited)
+      if (projectFeatures.data.settings.monthly_call_limit > 0 &&
+          projectFeatures.data.usage.calls_this_month >= 
+          projectFeatures.data.settings.monthly_call_limit) {
+        return {
+          allowed: false,
+          reason: "Monthly call limit reached"
+        };
+      }
+      
+      return {
+        allowed: true,
+        project_features: projectFeatures.data
+      };
+      
+    } catch (error) {
+      console.error("PROJECT-CALL-SERVICE: Error checking call permission:", error);
+      return {
+        allowed: false,
+        reason: "Error checking permissions"
+      };
+    }
+  }
+
+  /**
+   * Record call usage (from original code)
+   */
+  async recordCallUsage(projectId, durationSeconds = 0) {
+    try {
+      if (!this.ProjectCallFeatures) {
+        return { success: false, error: "Model not available" };
+      }
+      
+      await this.ProjectCallFeatures.updateOne(
+        { project_id: projectId },
+        {
+          $inc: {
+            "usage.calls_this_month": 1,
+            "usage.total_call_minutes": Math.ceil(durationSeconds / 60),
+            "usage.concurrent_calls_now": 1
+          },
+          $set: { updated_at: new Date() }
+        }
+      );
+      
+      return { success: true };
+      
+    } catch (error) {
+      console.error("PROJECT-CALL-SERVICE: Error recording call usage:", error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * End call (decrement concurrent count) (from original code)
+   */
+  async endCall(projectId) {
+    try {
+      if (!this.ProjectCallFeatures) {
+        return { success: false, error: "Model not available" };
+      }
+      
+      await this.ProjectCallFeatures.updateOne(
+        { project_id: projectId },
+        {
+          $inc: { "usage.concurrent_calls_now": -1 },
+          $set: { updated_at: new Date() }
+        }
+      );
+      
+      return { success: true };
+      
+    } catch (error) {
+      console.error("PROJECT-CALL-SERVICE: Error ending call:", error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Reset monthly usage (from original code)
+   */
+  async resetMonthlyUsage(projectId) {
+    try {
+      if (!this.ProjectCallFeatures) {
+        return { success: false, error: "Model not available" };
+      }
+      
+      await this.ProjectCallFeatures.updateOne(
+        { project_id: projectId },
+        {
+          $set: {
+            "usage.calls_this_month": 0,
+            "usage.total_call_minutes": 0,
+            "usage.last_reset_date": new Date(),
+            updated_at: new Date()
+          }
+        }
+      );
+      
+      return { success: true };
+      
+    } catch (error) {
+      console.error("PROJECT-CALL-SERVICE: Error resetting usage:", error);
+      return { success: false, error: error.message };
     }
   }
 }
